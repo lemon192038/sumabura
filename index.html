@@ -22,7 +22,7 @@ html,body{margin:0;height:100%;background:#111;color:#fff;font-family:sans-serif
 </div>
 <div id="menu"><h1 style="margin:0">大乱闘ファイターズ</h1><div id="msg"></div><div>名前 <input id="nm" maxlength="8" style="font-size:16px;width:9em;padding:4px"> <span id="pid"></span><br><small id="rec"></small></div>
 <div>あなた</div><div class="row" id="r1"></div><div>CPU</div><div class="row" id="r2"></div>
-<div class="row"><button class="cb" id="mk">オンライン：部屋を作る</button><button class="cb" id="jn">オンライン：部屋に入る</button></div><button id="go">たたかう！</button>
+<div class="row"><button class="cb" id="mk">オンライン：部屋を作る</button><button class="cb" id="jn">オンライン：部屋に入る</button><button class="cb" id="rm">オンライン：ランダムマッチ</button></div><button id="go">たたかう！</button>
 <small>左:移動スティック / 右:ボタン。スティックを倒しながらA=強攻撃・空中攻撃、Bで必殺技(上/下/横/なし)</small></div>
 <div id="net" style="display:none;position:absolute;inset:0;background:#000e;z-index:20;flex-direction:column;align-items:center;justify-content:center;gap:10px;font-size:20px;white-space:pre-line;text-align:center"><div id="nmsg"></div><div id="code" style="font-size:40px;letter-spacing:6px"></div><div id="pad" class="row" style="width:270px"></div><button class="cb" id="nx">閉じる</button></div>
 <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
@@ -363,30 +363,43 @@ function updProf(){const n=document.getElementById('nm');n.value=PF.name;documen
 document.getElementById('nm').onchange=e=>{PF.name=(e.target.value.trim()||'プレイヤー').slice(0,8);saveP();updProf()};updProf();saveP();
 const NET={role:null,conn:null,peer:null,opp:null,rin:{x:0,y:0,bh:0,sh:0,p:{}}};
 const nmsg=t=>document.getElementById('nmsg').textContent=t,nshow=v=>document.getElementById('net').style.display=v?'flex':'none';
-function nclose(){try{NET.conn&&NET.conn.close()}catch(e){}try{NET.peer&&NET.peer.destroy()}catch(e){}NET.conn=NET.peer=null;NET.role=null}
+function nclose(){try{NET.conn&&NET.conn.close()}catch(e){}try{NET.peer&&NET.peer.destroy()}catch(e){}NET.conn=NET.peer=null;NET.role=null;NET.joining=false}
 function go2(){nshow(0);document.getElementById('menu').style.display='none'}
 function hData(d){
 if(d.t=='join'&&NET.role=='h'){NET.opp={id:d.id,name:d.name};NET.conn.send({t:'start',ch:sel[0],gch:d.ch,name:PF.name,id:PF.id});start(sel[0],d.ch,PF.name,d.name,0);go2()}
-else if(d.t=='start'&&NET.role=='g'){NET.opp={id:d.id,name:d.name};start(d.ch,d.gch,d.name,PF.name,1);go2()}
+else if(d.t=='start'&&(NET.role=='g'||NET.joining)){NET.role='g';NET.joining=false;NET.opp={id:d.id,name:d.name};start(d.ch,d.gch,d.name,PF.name,1);go2()}
 else if(d.t=='in'&&NET.role=='h'){const r=NET.rin;r.x=d.x;r.y=d.y;r.bh=d.bh;r.sh=d.sh;for(const k in d.p)r.p[k]=1}
 else if(d.t=='s'&&NET.role=='g')applySnap(d);
 else if(d.t=='end'&&NET.role=='g')end(d.r.startsWith('かち')?'まけ…':'かち！')}
-function hostGame(){nshow(1);document.getElementById('pad').style.display='none';document.getElementById('code').textContent='';
-if(typeof Peer=='undefined'){nmsg('通信ライブラリを読み込めません。ネット接続を確認してください');return}
-nclose();const code=String(1000+Math.floor(Math.random()*9000));NET.role='h';NET.peer=new Peer('smashlike-'+code);nmsg('接続準備中…');
-NET.peer.on('open',()=>{document.getElementById('code').textContent=code;nmsg('部屋番号を相手に伝えてください')});
-NET.peer.on('error',e=>nmsg('エラー: '+e.type+'\n閉じてやり直してください'));
-NET.peer.on('connection',c=>{if(NET.conn){c.close();return}NET.conn=c;c.on('data',hData);c.on('close',()=>{if(on)end('かち！(相手が切断)')})})}
-function joinGame(code){document.getElementById('pad').style.display='none';
-if(typeof Peer=='undefined'){nmsg('通信ライブラリを読み込めません');return}
-nclose();NET.role='g';NET.peer=new Peer();nmsg('接続中…');
-NET.peer.on('open',()=>{const c=NET.peer.connect('smashlike-'+code);NET.conn=c;c.on('open',()=>{c.send({t:'join',name:PF.name,id:PF.id,ch:sel[0]});nmsg('参加しました。開始を待っています…')});c.on('data',hData);c.on('close',()=>{if(on)end('かち！(相手が切断)')})});
-NET.peer.on('error',e=>nmsg('接続できません: '+e.type+'\n番号を確認してやり直してください'))}
+const ICE={config:{iceServers:[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'},{urls:['turn:openrelay.metered.ca:80','turn:openrelay.metered.ca:443','turn:openrelay.metered.ca:443?transport=tcp'],username:'openrelayproject',credential:'openrelayproject'}]}};
+const SLOW='仲介サーバーに接続できません。\nネット接続を確認してください。\n(claude.aiのプレビュー内では通信が制限されることがあります。GitHub Pagesなどで開いてください)',QN=12;let RQ=0;
+const mkP=id=>id?new Peer(id,ICE):new Peer(ICE);
+function needPeer(cb){if(typeof Peer!='undefined')return cb();const u=['https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js','https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js','https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.4/peerjs.min.js'];let i=0;const t=()=>{if(i>=u.length){nmsg(SLOW);return}const s=document.createElement('script');s.src=u[i++];s.onload=()=>typeof Peer!='undefined'?cb():t();s.onerror=t;document.head.appendChild(s)};t()}
+function attachHost(p){p.on('connection',c=>{if(NET.conn||on){c.close();return}NET.conn=c;c.on('data',hData);c.on('close',()=>{if(NET.conn===c){NET.conn=null;if(on)end('かち！(相手が切断)')}})})}
+function hostGame(){nshow(1);pad.style.display='none';cd.textContent='';nclose();RQ++;nmsg('接続準備中…');needPeer(()=>{let tries=0;const reg=()=>{const code=String(1000+Math.floor(Math.random()*9000));NET.role='h';const p=NET.peer=mkP('smashlike-'+code),to=setTimeout(()=>nmsg(SLOW),10000);
+p.on('open',()=>{clearTimeout(to);cd.textContent=code;nmsg('部屋番号を相手に伝えてください');attachHost(p)});
+p.on('error',e=>{clearTimeout(to);if(e.type=='unavailable-id'&&tries++<5){try{p.destroy()}catch(x){}reg()}else nmsg('エラー: '+e.type+'\n閉じてやり直してください')})};reg()})}
+function joinGame(code){pad.style.display='none';nclose();RQ++;nmsg('接続中…');needPeer(()=>{NET.role='g';const p=NET.peer=mkP(),to=setTimeout(()=>nmsg(SLOW),10000);let fin=0;
+p.on('open',()=>{clearTimeout(to);const c=p.connect('smashlike-'+code),t2=setTimeout(()=>{if(!fin)nmsg('相手に接続できません。番号を確認し、相手が部屋を作ってから再度お試しください')},12000);c.on('open',()=>{fin=1;clearTimeout(t2);NET.conn=c;c.send({t:'join',name:PF.name,id:PF.id,ch:sel[0]});nmsg('参加しました。開始を待っています…')});c.on('data',hData);c.on('close',()=>{if(on)end('かち！(相手が切断)')})});
+p.on('error',e=>{clearTimeout(to);nmsg(e.type=='peer-unavailable'?'その番号の部屋が見つかりません':'エラー: '+e.type)})})}
+function tryConn(p,id,cb){NET.joining=true;let done=0;const c=p.connect(id),to=setTimeout(()=>{try{c.close()}catch(e){}fin(0)},4500);
+function fin(ok){if(done)return;done=1;clearTimeout(to);if(!ok)NET.joining=false;cb(ok)}
+p.on('error',e=>{if(e.type=='peer-unavailable'&&String(e.message).includes(id))fin(0)});
+c.on('open',()=>c.send({t:'join',name:PF.name,id:PF.id,ch:sel[0]}));
+c.on('data',d=>{if(d.t=='start'){NET.conn=c;fin(1)}hData(d)});
+c.on('close',()=>{if(!done)fin(0);else if(on&&NET.conn===c)end('かち！(相手が切断)')});c.on('error',()=>fin(0))}
+function randomMatch(){nshow(1);pad.style.display='none';cd.textContent='';nclose();const tk=++RQ;nmsg('対戦相手を探しています…');needPeer(()=>{if(tk!=RQ)return;NET.role='g';const p=NET.peer=mkP(),to=setTimeout(()=>nmsg(SLOW),10000);let k=0;
+p.on('error',e=>{if(e.type!='peer-unavailable'){clearTimeout(to);nmsg('エラー: '+e.type+'\n閉じてやり直してください')}});
+const next=()=>{if(tk!=RQ)return;if(k>=QN){try{p.destroy()}catch(e){}NET.peer=null;return rmHost(tk)}tryConn(p,'smashlike-q-'+k++,ok=>{if(!ok)next()})};
+p.on('open',()=>{clearTimeout(to);next()})})}
+function rmHost(tk){let k=0;const reg=()=>{if(tk!=RQ)return;if(k>=QN){nmsg('混雑しています。もう一度お試しください');return}NET.role='h';const p=NET.peer=mkP('smashlike-q-'+k);
+p.on('error',e=>{if(e.type=='unavailable-id'){k++;try{p.destroy()}catch(x){}reg()}else if(e.type!='peer-unavailable')nmsg('エラー: '+e.type)});
+p.on('open',()=>{nmsg('対戦相手を探しています…\n(待機中)');attachHost(p);const me=k,iv=setInterval(()=>{if(tk!=RQ||NET.conn||on||NET.peer!==p){clearInterval(iv);return}let j=0;const step=()=>{if(j>=me||tk!=RQ||NET.conn||NET.peer!==p)return;tryConn(p,'smashlike-q-'+j++,ok=>{if(!ok)step()})};step()},4000)})};reg()}
 let jc='';const pad=document.getElementById('pad'),cd=document.getElementById('code');
 '123456789C0J'.split('').forEach(k=>{const b=document.createElement('button');b.className='cb';b.style.cssText='width:80px;font-size:24px';b.textContent=k=='C'?'←':k=='J'?'OK':k;b.onclick=()=>{if(k=='C')jc=jc.slice(0,-1);else if(k=='J'){if(jc.length==4)joinGame(jc)}else if(jc.length<4)jc+=k;cd.textContent=jc||'____'};pad.appendChild(b)});
 document.getElementById('mk').onclick=hostGame;
 document.getElementById('jn').onclick=()=>{nshow(1);pad.style.display='flex';jc='';cd.textContent='____';nmsg('部屋番号(4桁)を入力')};
-document.getElementById('nx').onclick=()=>{nclose();nshow(0)};
+document.getElementById('nx').onclick=()=>{RQ++;nclose();nshow(0)};document.getElementById('rm').onclick=randomMatch;
 function sendSnap(){if(!NET.conn||!NET.conn.open)return;const r=v=>Math.round(v*10)/10;
 NET.conn.send({t:'s',q:P.map(f=>({x:r(f.x),y:r(f.y),vx:r(f.vx),vy:r(f.vy),f:f.f,dmg:r(f.dmg),st:f.st,stun:f.stun,sh:f.sh,shh:r(f.shh),inv:f.inv,ref:f.ref,ctr:f.ctr,mt:r(f.mt),pt:f.pt,pop:f.pop,air:f.air,atk:f.atk?{k:f.atk.k,t:f.atk.t}:null,hb:f.hb?f.hb.map(r):null})),j:PJ.map(p=>({x:r(p.x),y:r(p.y),r:r(p.r),col:p.col,blast:p.blast,vx:r(p.vx)})),e:EV.splice(0)})}
 function applySnap(d){if(!on)return;d.q.forEach((s,i)=>{const f=P[i];Object.assign(f,s);(f.tr=f.tr||[]).unshift([f.x,f.y]);f.tr.length=Math.min(f.tr.length,6)});PJ=d.j;for(const e of d.e)evFX(e)}
